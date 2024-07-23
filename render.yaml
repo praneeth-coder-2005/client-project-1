@@ -1,6 +1,13 @@
 services:
   - type: web
     name: telegram-bot
-    env: docker
-    buildCommand: docker build -t telegram-bot .
-    startCommand: docker run telegram-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    plan: free
+    envVars:
+      - key: TOKEN
+        value: 6576942975:AAFISid4xagXKh8bO0INDeSdS0BHk4ljSkU
+    packages:
+      - ffmpeg
+      - libgl1-mesa-glx
