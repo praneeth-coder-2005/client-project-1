@@ -8,10 +8,10 @@ import cv2
 import numpy as np
 import aiohttp
 import time
+import requests
 
-# Use environment variables for sensitive information
+# Replace with your actual bot token
 TOKEN = os.environ.get('TOKEN')
-STORAGE_CHANNEL_ID = os.environ.get('STORAGE_CHANNEL_ID')
 DEFAULT_WATERMARK_PATH = 'default_watermark.png'
 
 # Set up logging
@@ -43,7 +43,7 @@ async def set_watermark(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def handle_watermark(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         watermark_file = await context.bot.get_file(update.message.photo[-1].file_id)
-        await download_file(watermark_file.file_path, DEFAULT_WATERMARK_PATH)
+        await watermark_file.download_to_drive(DEFAULT_WATERMARK_PATH)
         await update.message.reply_text('Watermark image has been set.')
     except Exception as e:
         logger.error(f"Error processing watermark image: {e}")
@@ -70,18 +70,29 @@ async def process_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
         # Download the video file
         local_video_path = 'input_video.mp4'
-        progress_message = await context.bot.send_message(chat_id=update.effective_chat.id, text="Downloading video...")
-        await download_file(video_path, local_video_path, progress_message, context)
+        progress_message = await context.bot.send_message(chat_id=update.effective_chat.id, text="Download progress: 0%")
+        
+        # Use aiohttp for asynchronous download
+        async with aiohttp.ClientSession() as session:
+            async with session.get(video_path) as response:
+                total_size = int(response.headers.get('content-length', 0))
+                chunk_size = 8192
+                downloaded = 0
+                with open(local_video_path, 'wb') as f:
+                    async for chunk in response.content.iter_chunked(chunk_size):
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        progress = int(100 * downloaded / total_size)
+                        if progress % 5 == 0:  # Update every 5%
+                            await progress_message.edit_text(f"Download progress: {progress}%")
 
         # Process the video
         processed_video_path = process_video_opencv(local_video_path, title)
 
-        # Upload the processed video to the storage channel
+        # Send the processed video
+        await context.bot.send_message(chat_id=update.effective_chat.id, text="Uploading processed video...")
         with open(processed_video_path, 'rb') as video:
-            stored_message = await context.bot.send_video(chat_id=STORAGE_CHANNEL_ID, video=video, supports_streaming=True)
-
-        # Send the video file_id to the user
-        await update.effective_message.reply_text(f"Your processed video is ready. File ID: {stored_message.video.file_id}")
+            await context.bot.send_video(chat_id=update.effective_chat.id, video=video, supports_streaming=True)
 
         # Clean up
         os.remove(local_video_path)
@@ -165,28 +176,28 @@ def process_video_opencv(video_path: str, title: str) -> str:
 
     return output_path
 
-async def download_file(url: str, local_path: str, progress_message=None, context=None):
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as response:
-            total_size = int(response.headers.get('content-length', 0))
-            chunk_size = 8192
-            downloaded = 0
-            last_percentage = 0
-            with open(local_path, 'wb') as f:
-                async for chunk in response.content.iter_chunked(chunk_size):
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    percentage = int(100 * downloaded / total_size)
-                    if percentage > last_percentage and progress_message and context:
-                        try:
-                            await context.bot.edit_message_text(
-                                chat_id=progress_message.chat_id,
-                                message_id=progress_message.message_id,
-                                text=f"Download progress: {percentage}%"
-                            )
-                            last_percentage = percentage
-                        except Exception as e:
-                            logger.warning(f"Failed to update progress message: {e}")
+async def download_file_with_progress(url: str, local_path: str, progress_message, context: ContextTypes.DEFAULT_TYPE):
+    response = requests.get(url, stream=True)
+    total_length = int(response.headers.get('content-length', 0))
+
+    with open(local_path, 'wb') as f:
+        downloaded = 0
+        last_percentage = 0
+        for chunk in response.iter_content(chunk_size=8192):
+            if chunk:
+                f.write(chunk)
+                downloaded += len(chunk)
+                percentage = int(100 * downloaded / total_length)
+                if percentage > last_percentage:
+                    try:
+                        await context.bot.edit_message_text(
+                            chat_id=progress_message.chat_id,
+                            message_id=progress_message.message_id,
+                            text=f"Download progress: {percentage}%"
+                        )
+                        last_percentage = percentage
+                    except Exception as e:
+                        logger.warning(f"Failed to update progress message: {e}")
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error(msg="Exception while handling an update:", exc_info=context.error)
@@ -213,9 +224,6 @@ def main():
 
     application.add_handler(conv_handler)
     application.add_error_handler(error_handler)
-    
-    # Add a delay before starting the bot
-    time.sleep(10)
     application.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
