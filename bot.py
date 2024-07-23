@@ -1,11 +1,13 @@
-import requests
+import os
+import asyncio
+import logging
+import subprocess
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 import cv2
 import numpy as np
-import os
-import logging
-import subprocess
+import aiohttp
+
 
 # Replace with your actual bot token
 TOKEN = os.environ.get('TOKEN')
@@ -14,6 +16,7 @@ DEFAULT_WATERMARK_PATH = 'default_watermark.png'
 # Set up logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
+
 
 # States for conversation handler
 TITLE = range(1)
@@ -56,7 +59,6 @@ async def receive_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     await update.message.reply_text('Processing your video...')
     await process_video(update, context)
     return ConversationHandler.END
-
 async def process_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         video_file_id = context.user_data.get('video_file')
@@ -68,7 +70,20 @@ async def process_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         # Download the video file
         local_video_path = 'input_video.mp4'
         progress_message = await context.bot.send_message(chat_id=update.effective_chat.id, text="Download progress: 0%")
-        await download_file_with_progress(video_path, local_video_path, progress_message, context)
+        
+        # Use aiohttp for asynchronous download
+        async with aiohttp.ClientSession() as session:
+            async with session.get(video_path) as response:
+                total_size = int(response.headers.get('content-length', 0))
+                chunk_size = 8192
+                downloaded = 0
+                with open(local_video_path, 'wb') as f:
+                    async for chunk in response.content.iter_chunked(chunk_size):
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        progress = int(100 * downloaded / total_size)
+                        if progress % 5 == 0:  # Update every 5%
+                            await progress_message.edit_text(f"Download progress: {progress}%")
 
         # Process the video
         processed_video_path = process_video_opencv(local_video_path, title)
@@ -76,7 +91,7 @@ async def process_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         # Send the processed video
         await context.bot.send_message(chat_id=update.effective_chat.id, text="Uploading processed video...")
         with open(processed_video_path, 'rb') as video:
-            await context.bot.send_video(chat_id=update.effective_chat.id, video=video)
+            await context.bot.send_video(chat_id=update.effective_chat.id, video=video, supports_streaming=True)
 
         # Clean up
         os.remove(local_video_path)
