@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: telegram-bot
+    env: docker
+    buildCommand: docker build -t telegram-bot .
+    startCommand: docker run telegram-bot
