@@ -8,7 +8,7 @@ import logging
 import subprocess
 
 # Replace with your actual bot token
-TOKEN = '6576942975:AAFISid4xagXKh8bO0INDeSdS0BHk4ljSkU'
+TOKEN = os.environ.get('6576942975:AAFISid4xagXKh8bO0INDeSdS0BHk4ljSkU')
 DEFAULT_WATERMARK_PATH = 'default_watermark.png'
 
 # Set up logging
