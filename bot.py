@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 import aiohttp
 import time
-import requests
+
 
 # Replace with your actual bot token
 TOKEN = os.environ.get('TOKEN')
