@@ -171,18 +171,22 @@ async def download_file(url: str, local_path: str, progress_message=None, contex
             total_size = int(response.headers.get('content-length', 0))
             chunk_size = 8192
             downloaded = 0
+            last_percentage = 0
             with open(local_path, 'wb') as f:
                 async for chunk in response.content.iter_chunked(chunk_size):
                     f.write(chunk)
                     downloaded += len(chunk)
-                    if progress_message and context:
-                        progress = int(100 * downloaded / total_size)
-                        if progress % 5 == 0:  # Update every 5%
+                    percentage = int(100 * downloaded / total_size)
+                    if percentage > last_percentage and progress_message and context:
+                        try:
                             await context.bot.edit_message_text(
                                 chat_id=progress_message.chat_id,
                                 message_id=progress_message.message_id,
-                                text=f"Download progress: {progress}%"
+                                text=f"Download progress: {percentage}%"
                             )
+                            last_percentage = percentage
+                        except Exception as e:
+                            logger.warning(f"Failed to update progress message: {e}")
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error(msg="Exception while handling an update:", exc_info=context.error)
@@ -212,7 +216,7 @@ def main():
     
     # Add a delay before starting the bot
     time.sleep(10)
-    application.run_polling()
+    application.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
     main()
