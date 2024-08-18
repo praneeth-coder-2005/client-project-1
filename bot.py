@@ -7,9 +7,8 @@ from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# Replace with your actual bot token and webhook URL
-TOKEN = "6343124020:AAFFap55YkVIN_pyXzGtsyTNk2nLeJ0_qRI"
-WEBHOOK_URL = "https://test-1-9bmd.onrender.com/6343124020:AAFFap55YkVIN_pyXzGtsyTNk2nLeJ0_qRI"
+# Replace with your actual bot token
+TOKEN = "7176310616:AAEA0MpZMbfxANC2oRJIpdTjX0R2TOEta5A"
 
 # Set up logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -220,13 +219,8 @@ def main():
     # Error handler
     application.add_error_handler(error_handler)
 
-    # Start webhook
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=int(os.environ.get("PORT", 8443)),
-        url_path=TOKEN,
-        webhook_url=WEBHOOK_URL
-    )
+    # Use polling instead of webhooks
+    application.run_polling()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
