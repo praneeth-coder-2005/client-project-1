@@ -63,6 +63,50 @@ async def download_file(url: str, file_path: str, update: Update, context: Conte
         logger.error(f"Error downloading file: {e}")
         raise
 
+def add_watermark_title_timeline(input_video_path, output_video_path, title_text, watermark_path):
+    """Adds a watermark, title, and timeline to the video and reduces quality."""
+    try:
+        # Load the video
+        video_clip = VideoFileClip(input_video_path)
+
+        # Reduce the resolution and quality to prevent resource overuse
+        video_clip = video_clip.resize(height=360)
+
+        video_duration = video_clip.duration
+
+        # Create the title text
+        title_clip = TextClip(title_text, fontsize=70, color='white').set_duration(video_duration).set_position('top').set_fps(24)
+
+        # Create a timeline (time overlay)
+        def time_text(t):
+            minutes = int(t // 60)
+            seconds = int(t % 60)
+            return f"{minutes}:{seconds:02d}"
+
+        timeline_clip = (TextClip(time_text(0), fontsize=40, color='white')
+                         .set_duration(video_duration)
+                         .set_position(('right', 'bottom'))
+                         .set_fps(24))
+
+        # Add watermark if provided
+        if watermark_path and os.path.exists(watermark_path):
+            watermark_clip = VideoFileClip(watermark_path).resize(height=50).set_duration(video_duration).set_position(('right', 'top'))
+            video_clip = CompositeVideoClip([video_clip, title_clip, timeline_clip, watermark_clip])
+        else:
+            video_clip = CompositeVideoClip([video_clip, title_clip, timeline_clip])
+
+        # Write the output video, retry on failure
+        try:
+            video_clip.write_videofile(output_video_path, codec="libx264", audio_codec="aac")
+            logger.info(f"Video processing completed: {output_video_path}")
+        except Exception as e:
+            logger.error(f"Error during video processing: {e}")
+            raise
+
+    except Exception as e:
+        logger.error(f"Error processing video: {e}")
+        raise
+
 async def upload_file(file_path: str, update: Update, context: ContextTypes.DEFAULT_TYPE, progress_message):
     """Uploads the processed file to the user with progress tracking."""
     try:
@@ -99,17 +143,16 @@ async def upload_file(file_path: str, update: Update, context: ContextTypes.DEFA
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_text = update.message.text
     if message_text.startswith('http'):
-        download_url = message_text.strip()
         progress_message = await update.message.reply_text("Starting download and processing...")
 
-        local_filename = "downloaded_video.mp4"  # Adjust filename based on file type if needed
+        local_filename = "downloaded_video.mp4"
         output_filename = "output_video.mp4"
-        watermark_path = "watermark.png"  # Path to your watermark file (should be available in the bot's directory)
-        title_text = "Your Video Title"  # Example title text
+        watermark_path = "watermark.png"
+        title_text = "Your Video Title"
 
         try:
             # Download the file with progress tracking
-            file_path = await download_file(download_url, local_filename, update, context, progress_message)
+            file_path = await download_file(message_text, local_filename, update, context, progress_message)
 
             # Process the video (add watermark, title, and timeline)
             add_watermark_title_timeline(file_path, output_filename, title_text, watermark_path)
@@ -125,40 +168,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     else:
         await update.message.reply_text("Please provide a valid download link.")
-
-def add_watermark_title_timeline(input_video_path, output_video_path, title_text, watermark_path):
-    """Adds a watermark, title, and timeline to the video."""
-    try:
-        video_clip = VideoFileClip(input_video_path)
-        video_duration = video_clip.duration
-
-        # Create the title text
-        title_clip = TextClip(title_text, fontsize=70, color='white').set_duration(video_duration).set_position('top').set_fps(24)
-
-        # Create a timeline (time overlay)
-        def time_text(t):
-            minutes = int(t // 60)
-            seconds = int(t % 60)
-            return f"{minutes}:{seconds:02d}"
-
-        timeline_clip = (TextClip(time_text(0), fontsize=40, color='white')
-                         .set_duration(video_duration)
-                         .set_position(('right', 'bottom'))
-                         .set_fps(24))
-
-        # Add watermark if provided
-        if watermark_path and os.path.exists(watermark_path):
-            watermark_clip = VideoFileClip(watermark_path).resize(height=50).set_duration(video_duration).set_position(('right', 'top'))
-            video_clip = CompositeVideoClip([video_clip, title_clip, timeline_clip, watermark_clip])
-        else:
-            video_clip = CompositeVideoClip([video_clip, title_clip, timeline_clip])
-
-        # Write the output video
-        video_clip.write_videofile(output_video_path, codec="libx264", audio_codec="aac")
-        logger.info(f"Video processing completed: {output_video_path}")
-    except Exception as e:
-        logger.error(f"Error during video processing: {e}")
-        raise
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error(msg="Exception while handling an update:", exc_info=context.error)
@@ -183,7 +192,7 @@ def main():
         listen="0.0.0.0",
         port=int(os.environ.get("PORT", 8443)),
         url_path=TOKEN,
-        webhook_url=WEBHOOK_URL  # Static webhook URL
+        webhook_url=WEBHOOK_URL
     )
 
 if __name__ == '__main__':
