@@ -2,6 +2,7 @@ import os
 import logging
 import aiohttp
 import time
+import asyncio
 import traceback
 from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
 from telegram import Update
@@ -17,6 +18,8 @@ logger = logging.getLogger(__name__)
 CHUNK_SIZE = 1024 * 1024  # 1MB chunk size for streaming download
 MAX_RETRIES = 5  # Maximum number of retries for failed downloads
 TIMEOUT = 30  # Timeout increased to 30 seconds
+DOWNLOAD_SPEED_LIMIT = 1.25 * 1024 * 1024  # 10 Mbps = 1.25 MB/s
+UPLOAD_SPEED_LIMIT = 1.25 * 1024 * 1024  # 10 Mbps = 1.25 MB/s
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text('Send me a video link, and I will add a watermark, title, and timestamp.')
@@ -32,13 +35,12 @@ You can send a video file or provide a download link for a video file, and the b
     await update.message.reply_text(help_text)
 
 async def download_file(url: str, file_path: str, update: Update, context: ContextTypes.DEFAULT_TYPE, progress_message):
-    """Downloads the file from the provided URL via streaming, with increased timeout and retry logic."""
+    """Downloads the file with a speed limit of 1.25 MB/s (10 Mbps)."""
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=None, sock_read=TIMEOUT)) as session:
             async with session.get(url) as response:
                 total_size = int(response.headers.get('content-length', 0))
                 bytes_downloaded = 0
-                retries = 0
                 start_time = time.time()
 
                 # Open the file for writing in binary mode
@@ -52,48 +54,37 @@ async def download_file(url: str, file_path: str, update: Update, context: Conte
                             bytes_downloaded += len(chunk)
 
                             # Calculate percentage and speed
-                            if total_size:
-                                percent_downloaded = (bytes_downloaded / total_size) * 100
-                            else:
-                                percent_downloaded = 0  # Unknown size, can't calculate percentage
+                            percent_downloaded = (bytes_downloaded / total_size) * 100 if total_size else 0
                             elapsed_time = time.time() - start_time
-                            download_speed = bytes_downloaded / elapsed_time / 1024 / 1024  # Speed in MB/s
+                            download_speed = bytes_downloaded / elapsed_time
+
+                            # Throttle download speed
+                            if download_speed > DOWNLOAD_SPEED_LIMIT:
+                                await asyncio.sleep((len(chunk) / DOWNLOAD_SPEED_LIMIT))
 
                             # Update progress message
                             await context.bot.edit_message_text(
                                 chat_id=progress_message.chat_id,
                                 message_id=progress_message.message_id,
-                                text=f"Downloading... {percent_downloaded:.2f}%\nSpeed: {download_speed:.2f} MB/s"
+                                text=f"Downloading... {percent_downloaded:.2f}%\nSpeed: {download_speed / 1024 / 1024:.2f} MB/s"
                             )
-
-                        except asyncio.TimeoutError as e:
-                            logger.error(f"Timeout error during download: {e}")
-                            retries += 1
-                            if retries > MAX_RETRIES:
-                                raise Exception("Max retries exceeded due to timeout.")
+                        except (aiohttp.ClientPayloadError, asyncio.TimeoutError) as e:
+                            logger.error(f"Download error: {e}")
                             await asyncio.sleep(2)  # Wait before retrying
-
-                        except aiohttp.ClientPayloadError as e:
-                            logger.error(f"Error downloading chunk: {e}")
-                            retries += 1
-                            if retries > MAX_RETRIES:
-                                raise Exception("Max retries exceeded for downloading.")
-                            await asyncio.sleep(2)  # Wait before retrying
-
                         except Exception as e:
                             logger.error(f"Error downloading file: {e}")
-                            logger.error(traceback.format_exc())  # Log full traceback for more details
+                            logger.error(traceback.format_exc())  # Log full traceback
                             raise
 
                 logger.info(f"File downloaded successfully: {file_path}")
                 return file_path
     except Exception as e:
         logger.error(f"Error downloading file: {e}")
-        logger.error(traceback.format_exc())  # Log full traceback for more details
+        logger.error(traceback.format_exc())
         raise
 
 async def upload_file(file_path: str, update: Update, context: ContextTypes.DEFAULT_TYPE, progress_message):
-    """Uploads the processed file to the user with progress tracking."""
+    """Uploads the processed file with a speed limit of 1.25 MB/s (10 Mbps)."""
     try:
         total_size = os.path.getsize(file_path)
         bytes_uploaded = 0
@@ -110,20 +101,24 @@ async def upload_file(file_path: str, update: Update, context: ContextTypes.DEFA
                 # Calculate percentage and speed
                 percent_uploaded = (bytes_uploaded / total_size) * 100
                 elapsed_time = time.time() - start_time
-                upload_speed = bytes_uploaded / elapsed_time / 1024 / 1024  # Speed in MB/s
+                upload_speed = bytes_uploaded / elapsed_time
+
+                # Throttle upload speed
+                if upload_speed > UPLOAD_SPEED_LIMIT:
+                    await asyncio.sleep((len(chunk) / UPLOAD_SPEED_LIMIT))
 
                 # Update progress message
                 await context.bot.edit_message_text(
                     chat_id=progress_message.chat_id,
                     message_id=progress_message.message_id,
-                    text=f"Uploading... {percent_uploaded:.2f}%\nSpeed: {upload_speed:.2f} MB/s"
+                    text=f"Uploading... {percent_uploaded:.2f}%\nSpeed: {upload_speed / 1024 / 1024:.2f} MB/s"
                 )
 
         # Upload complete, send the final file
         await context.bot.send_document(chat_id=update.effective_chat.id, document=open(file_path, 'rb'))
     except Exception as e:
         logger.error(f"Error uploading file: {e}")
-        logger.error(traceback.format_exc())  # Log full traceback for more details
+        logger.error(traceback.format_exc())
         raise
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -198,7 +193,7 @@ def add_watermark_title_timeline(input_video_path, output_video_path, title_text
         logger.info(f"Video processing completed: {output_video_path}")
     except Exception as e:
         logger.error(f"Error processing video: {e}")
-        logger.error(traceback.format_exc())  # Log full traceback for more details
+        logger.error(traceback.format_exc())
         raise
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
