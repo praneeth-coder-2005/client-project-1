@@ -2,7 +2,7 @@ import os
 import logging
 import aiohttp
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 # Define the maximum file size (2GB)
 MAX_FILESIZE_UPLOAD = 2 * 1024 * 1024 * 1024  # 2GB in bytes
@@ -72,7 +72,10 @@ def main():
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(MessageHandler(filters.Document.ALL | filters.Video.ALL, handle_large_file))
+    
+    # Use filters for documents and video files based on MIME type and video filter
+    application.add_handler(MessageHandler(filters.Document.MIME_TYPE("video/*") | filters.VIDEO, handle_large_file))
+    
     application.add_error_handler(error_handler)
     application.run_polling(drop_pending_updates=True)
 
