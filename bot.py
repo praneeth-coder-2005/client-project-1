@@ -37,16 +37,32 @@ async def download_chunk(url: str, start: int, end: int, session: aiohttp.Client
     try:
         async with session.get(url, headers=headers) as response:
             if response.status in [200, 206]:  # 206 is partial content for ranged downloads
+                content_length = response.headers.get('Content-Length')
+                received_length = 0
+                
                 with open(file_path, "r+b") as f:
                     f.seek(start)
                     while True:
                         chunk = await response.content.read(CHUNK_SIZE)
                         if not chunk:
                             break
+                        received_length += len(chunk)
                         f.write(chunk)
+                
+                # Check if received length matches the expected content length
+                if content_length and int(content_length) != received_length:
+                    raise aiohttp.ClientPayloadError("Response payload is not completed.")
+
                 return True
             else:
                 raise Exception(f"Unexpected response status: {response.status}")
+    except aiohttp.ClientPayloadError as e:
+        logger.error(f"Error downloading chunk: {e}")
+        if retries < MAX_RETRIES:
+            await asyncio.sleep(2)
+            return await download_chunk(url, start, end, session, file_path, retries + 1)
+        else:
+            return False
     except Exception as e:
         logger.error(f"Error downloading chunk: {e}")
         if retries < MAX_RETRIES:
