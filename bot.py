@@ -1,6 +1,7 @@
 import os
 import logging
 import aiohttp
+import asyncio
 import time
 from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
 from telegram import Update
@@ -14,7 +15,7 @@ WEBHOOK_URL = "https://test-1-9bmd.onrender.com/6343124020:AAFFap55YkVIN_pyXzGts
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-CHUNK_SIZE = 5 * 1024 * 1024  # 5MB chunk size
+CHUNK_SIZE = 10 * 1024 * 1024  # 10MB chunk size for parallel downloads
 MAX_RETRIES = 3  # Maximum number of retries for failed chunks
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -30,48 +31,59 @@ You can send a video file or provide a download link for a video file, and the b
 """
     await update.message.reply_text(help_text)
 
+async def download_chunk(url: str, start: int, end: int, session: aiohttp.ClientSession, file_path: str):
+    """Downloads a specific chunk of the file."""
+    headers = {"Range": f"bytes={start}-{end}"}
+    async with session.get(url, headers=headers) as response:
+        if response.status in [200, 206]:  # 206 is partial content for ranged downloads
+            with open(file_path, "r+b") as f:
+                f.seek(start)
+                while True:
+                    chunk = await response.content.read(CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+
 async def download_file(url: str, file_path: str, update: Update, context: ContextTypes.DEFAULT_TYPE, progress_message):
-    """Downloads the file from the provided URL with retry logic and tracks the progress."""
+    """Downloads the file from the provided URL in parallel chunks and tracks the progress."""
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
+            async with session.head(url) as response:
                 total_size = int(response.headers.get('content-length', 0))
-                bytes_downloaded = 0
-                retries = 0
-                start_time = time.time()  # Initialize start_time
 
-                with open(file_path, 'wb') as f:
-                    while bytes_downloaded < total_size:
-                        try:
-                            chunk = await response.content.read(CHUNK_SIZE)
-                            if not chunk:
-                                break
-                            f.write(chunk)
-                            bytes_downloaded += len(chunk)
+        # Create an empty file of the required size
+        with open(file_path, "wb") as f:
+            f.truncate(total_size)
 
-                            # Calculate percentage and speed
-                            percent_downloaded = (bytes_downloaded / total_size) * 100 if total_size else 0
-                            elapsed_time = time.time() - start_time
-                            download_speed = bytes_downloaded / elapsed_time / 1024 / 1024  # Speed in MB/s
+        # Split the file into chunks for parallel downloading
+        ranges = [(i, min(i + CHUNK_SIZE - 1, total_size - 1)) for i in range(0, total_size, CHUNK_SIZE)]
+        
+        # Use asyncio's gather to run parallel downloads
+        start_time = time.time()
+        bytes_downloaded = 0
 
-                            # Update progress message
-                            await context.bot.edit_message_text(
-                                chat_id=progress_message.chat_id,
-                                message_id=progress_message.message_id,
-                                text=f"Downloading... {percent_downloaded:.2f}%\nSpeed: {download_speed:.2f} MB/s"
-                            )
+        async with aiohttp.ClientSession() as session:
+            tasks = []
+            for start, end in ranges:
+                task = asyncio.create_task(download_chunk(url, start, end, session, file_path))
+                tasks.append(task)
+                bytes_downloaded += (end - start + 1)
 
-                            retries = 0  # Reset retries after successful download of a chunk
-                        except Exception as e:
-                            retries += 1
-                            logger.error(f"Error downloading chunk: {e}")
-                            if retries > MAX_RETRIES:
-                                raise Exception("Max retries exceeded for downloading.")
-                            time.sleep(2)  # Wait for 2 seconds before retrying
+                # Calculate percentage and speed
+                percent_downloaded = (bytes_downloaded / total_size) * 100 if total_size else 0
+                elapsed_time = time.time() - start_time
+                download_speed = bytes_downloaded / elapsed_time / 1024 / 1024  # Speed in MB/s
 
-                logger.info(f"File downloaded successfully: {file_path}")
-                return file_path
-
+                # Update progress message
+                await context.bot.edit_message_text(
+                    chat_id=progress_message.chat_id,
+                    message_id=progress_message.message_id,
+                    text=f"Downloading... {percent_downloaded:.2f}%\nSpeed: {download_speed:.2f} MB/s"
+                )
+            await asyncio.gather(*tasks)
+            
+        logger.info(f"File downloaded successfully: {file_path}")
+        return file_path
     except Exception as e:
         logger.error(f"Error downloading file: {e}")
         raise
