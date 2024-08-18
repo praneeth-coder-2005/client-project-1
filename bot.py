@@ -43,16 +43,21 @@ async def handle_large_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file = update.message.document or update.message.video
     file_size = file.file_size
 
+    # Check if the file is too large
     if file_size > MAX_FILESIZE_UPLOAD:
         await update.message.reply_text("The file is too large for Telegram (max 2GB).")
         return
+
+    # Check if the document has a video MIME type
+    if update.message.document and 'video' in update.message.document.mime_type:
+        file = update.message.document
 
     # Get the direct download URL
     file_info = await file.get_file()
     download_url = file_info.file_path
 
     # Download the file using the URL
-    local_filename = f"{file.file_id}.mp4"  # or .ext based on file type
+    local_filename = f"{file.file_id}.mp4"  # Adjust the extension based on the file type
     await update.message.reply_text(f"Downloading file: {local_filename}")
 
     try:
@@ -73,8 +78,8 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     
-    # Use filters for documents and video files based on MIME type and video filter
-    application.add_handler(MessageHandler(filters.Document.MIME_TYPE("video/*") | filters.VIDEO, handle_large_file))
+    # Using filters.VIDEO for video files and filters.Document for documents
+    application.add_handler(MessageHandler(filters.VIDEO | filters.Document, handle_large_file))
     
     application.add_error_handler(error_handler)
     application.run_polling(drop_pending_updates=True)
