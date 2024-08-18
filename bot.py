@@ -1,13 +1,12 @@
 import os
 import logging
-import aiohttp
 from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 # Replace with your actual bot token and webhook URL
-TOKEN = os.environ.get('TOKEN')
-WEBHOOK_URL = os.environ.get('WEBHOOK_URL')
+TOKEN = "6343124020:AAFFap55YkVIN_pyXzGtsyTNk2nLeJ0_qRI"
+WEBHOOK_URL = "https://test-1-9bmd.onrender.com/6343124020:AAFFap55YkVIN_pyXzGtsyTNk2nLeJ0_qRI"
 
 # Set up logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -55,7 +54,12 @@ def add_watermark_title_timeline(input_video_path, output_video_path, title_text
     title_clip = TextClip(title_text, fontsize=70, color='white').set_duration(video_duration).set_position('top').set_fps(24)
 
     # Create a timeline (time overlay)
-    timeline_clip = (TextClip(lambda t: f"{int(t // 60)}:{int(t % 60):02d}", fontsize=40, color='white')
+    def time_text(t):
+        minutes = int(t // 60)
+        seconds = int(t % 60)
+        return f"{minutes}:{seconds:02d}"
+
+    timeline_clip = (TextClip(time_text(0), fontsize=40, color='white')
                      .set_duration(video_duration)
                      .set_position(('right', 'bottom'))
                      .set_fps(24))
@@ -121,7 +125,7 @@ def main():
         listen="0.0.0.0",
         port=int(os.environ.get("PORT", 8443)),
         url_path=TOKEN,
-        webhook_url=f"https://test-1-9bmd.onrender.com/6343124020:AAFFap55YkVIN_pyXzGtsyTNk2nLeJ0_qRI"
+        webhook_url=WEBHOOK_URL  # Static webhook URL
     )
 
 if __name__ == '__main__':
