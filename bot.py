@@ -36,14 +36,14 @@ async def download_file(url: str, file_path: str, update: Update, context: Conte
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as response:
                 total_size = int(response.headers.get('content-length', 0))
-                chunk_size = CHUNK_SIZE
                 bytes_downloaded = 0
                 retries = 0
+                start_time = time.time()  # Initialize start_time
 
                 with open(file_path, 'wb') as f:
                     while bytes_downloaded < total_size:
                         try:
-                            chunk = await response.content.read(chunk_size)
+                            chunk = await response.content.read(CHUNK_SIZE)
                             if not chunk:
                                 break
                             f.write(chunk)
@@ -51,7 +51,8 @@ async def download_file(url: str, file_path: str, update: Update, context: Conte
 
                             # Calculate percentage and speed
                             percent_downloaded = (bytes_downloaded / total_size) * 100 if total_size else 0
-                            download_speed = bytes_downloaded / (time.time() - start_time) / 1024 / 1024  # Speed in MB/s
+                            elapsed_time = time.time() - start_time
+                            download_speed = bytes_downloaded / elapsed_time / 1024 / 1024  # Speed in MB/s
 
                             # Update progress message
                             await context.bot.edit_message_text(
