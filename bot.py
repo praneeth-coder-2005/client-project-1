@@ -1,5 +1,6 @@
 import os
 import logging
+import aiohttp  # Ensure aiohttp is imported
 from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -28,7 +29,7 @@ You can send a video file or provide a download link for a video file, and the b
 async def download_file(url: str, file_path: str):
     """Downloads the file from the provided URL and saves it locally."""
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession() as session:  # Using aiohttp for async file download
             async with session.get(url) as response:
                 if response.status == 200:
                     with open(file_path, 'wb') as f:
