@@ -51,7 +51,7 @@ def main():
         listen="0.0.0.0",
         port=int(os.environ.get("PORT", 8443)),
         url_path=TOKEN,
-        webhook_url=f"{WEBHOOK_URL}/{TOKEN}"
+        webhook_url=f"https://test-1-9bmd.onrender.com/6343124020:AAFFap55YkVIN_pyXzGtsyTNk2nLeJ0_qRI"
     )
 
 if __name__ == '__main__':
