@@ -2,6 +2,7 @@ import os
 import logging
 import aiohttp
 import time
+import traceback
 from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -73,12 +74,14 @@ async def download_file(url: str, file_path: str, update: Update, context: Conte
                             await asyncio.sleep(2)  # Wait before retrying
                         except Exception as e:
                             logger.error(f"Error downloading file: {e}")
+                            logger.error(traceback.format_exc())  # Log full traceback for more details
                             raise
 
                 logger.info(f"File downloaded successfully: {file_path}")
                 return file_path
     except Exception as e:
         logger.error(f"Error downloading file: {e}")
+        logger.error(traceback.format_exc())  # Log full traceback for more details
         raise
 
 async def upload_file(file_path: str, update: Update, context: ContextTypes.DEFAULT_TYPE, progress_message):
@@ -112,6 +115,7 @@ async def upload_file(file_path: str, update: Update, context: ContextTypes.DEFA
         await context.bot.send_document(chat_id=update.effective_chat.id, document=open(file_path, 'rb'))
     except Exception as e:
         logger.error(f"Error uploading file: {e}")
+        logger.error(traceback.format_exc())  # Log full traceback for more details
         raise
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -186,6 +190,7 @@ def add_watermark_title_timeline(input_video_path, output_video_path, title_text
         logger.info(f"Video processing completed: {output_video_path}")
     except Exception as e:
         logger.error(f"Error processing video: {e}")
+        logger.error(traceback.format_exc())  # Log full traceback for more details
         raise
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
