@@ -16,7 +16,8 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 1024 * 1024  # 1MB chunk size for streaming download
-MAX_RETRIES = 3  # Maximum number of retries for failed downloads
+MAX_RETRIES = 5  # Maximum number of retries for failed downloads
+TIMEOUT = 30  # Timeout increased to 30 seconds
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text('Send me a video link, and I will add a watermark, title, and timestamp.')
@@ -32,9 +33,9 @@ You can send a video file or provide a download link for a video file, and the b
     await update.message.reply_text(help_text)
 
 async def download_file(url: str, file_path: str, update: Update, context: ContextTypes.DEFAULT_TYPE, progress_message):
-    """Downloads the file from the provided URL via streaming, without relying on content-length."""
+    """Downloads the file from the provided URL via streaming, with increased timeout and retry logic."""
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=None, sock_read=TIMEOUT)) as session:
             async with session.get(url) as response:
                 total_size = int(response.headers.get('content-length', 0))
                 bytes_downloaded = 0
@@ -66,12 +67,20 @@ async def download_file(url: str, file_path: str, update: Update, context: Conte
                                 text=f"Downloading... {percent_downloaded:.2f}%\nSpeed: {download_speed:.2f} MB/s"
                             )
 
+                        except asyncio.TimeoutError as e:
+                            logger.error(f"Timeout error during download: {e}")
+                            retries += 1
+                            if retries > MAX_RETRIES:
+                                raise Exception("Max retries exceeded due to timeout.")
+                            await asyncio.sleep(2)  # Wait before retrying
+
                         except aiohttp.ClientPayloadError as e:
                             logger.error(f"Error downloading chunk: {e}")
                             retries += 1
                             if retries > MAX_RETRIES:
                                 raise Exception("Max retries exceeded for downloading.")
                             await asyncio.sleep(2)  # Wait before retrying
+
                         except Exception as e:
                             logger.error(f"Error downloading file: {e}")
                             logger.error(traceback.format_exc())  # Log full traceback for more details
