@@ -39,26 +39,51 @@ async def download_file(url: str, file_path: str):
             else:
                 raise Exception(f"Failed to download file: Status code {response.status}")
 
-async def handle_large_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    file = update.message.document or update.message.video
-    file_size = file.file_size
+async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Handling video files sent directly as videos
+    video = update.message.video
+    file_size = video.file_size
 
-    # Check if the file is too large
     if file_size > MAX_FILESIZE_UPLOAD:
         await update.message.reply_text("The file is too large for Telegram (max 2GB).")
         return
 
-    # Check if the document has a video MIME type
-    if update.message.document and 'video' in update.message.document.mime_type:
-        file = update.message.document
-
     # Get the direct download URL
-    file_info = await file.get_file()
+    file_info = await video.get_file()
     download_url = file_info.file_path
 
     # Download the file using the URL
-    local_filename = f"{file.file_id}.mp4"  # Adjust the extension based on the file type
+    local_filename = f"{video.file_id}.mp4"  # Adjust the extension based on the file type
     await update.message.reply_text(f"Downloading file: {local_filename}")
+
+    try:
+        await download_file(download_url, local_filename)
+        await update.message.reply_text(f"File downloaded successfully: {local_filename}")
+    except Exception as e:
+        await update.message.reply_text(f"Error downloading file: {e}")
+        logger.error(f"Error downloading file: {e}")
+
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Handling documents and checking if they are videos
+    document = update.message.document
+    file_size = document.file_size
+
+    if file_size > MAX_FILESIZE_UPLOAD:
+        await update.message.reply_text("The file is too large for Telegram (max 2GB).")
+        return
+
+    # Check if the document is a video based on its MIME type
+    if 'video' not in document.mime_type:
+        await update.message.reply_text("This document is not a video file.")
+        return
+
+    # Get the direct download URL
+    file_info = await document.get_file()
+    download_url = file_info.file_path
+
+    # Download the file using the URL
+    local_filename = f"{document.file_id}.mp4"  # Adjust the extension based on the file type
+    await update.message.reply_text(f"Downloading video document: {local_filename}")
 
     try:
         await download_file(download_url, local_filename)
@@ -78,8 +103,9 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     
-    # Using filters.VIDEO for video files and filters.Document for documents
-    application.add_handler(MessageHandler(filters.VIDEO | filters.Document, handle_large_file))
+    # Separate handlers for videos and documents
+    application.add_handler(MessageHandler(filters.VIDEO, handle_video))
+    application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     
     application.add_error_handler(error_handler)
     application.run_polling(drop_pending_updates=True)
