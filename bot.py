@@ -31,18 +31,29 @@ You can send a video file or provide a download link for a video file, and the b
 """
     await update.message.reply_text(help_text)
 
-async def download_chunk(url: str, start: int, end: int, session: aiohttp.ClientSession, file_path: str):
-    """Downloads a specific chunk of the file."""
+async def download_chunk(url: str, start: int, end: int, session: aiohttp.ClientSession, file_path: str, retries: int = 0):
+    """Downloads a specific chunk of the file with retry logic."""
     headers = {"Range": f"bytes={start}-{end}"}
-    async with session.get(url, headers=headers) as response:
-        if response.status in [200, 206]:  # 206 is partial content for ranged downloads
-            with open(file_path, "r+b") as f:
-                f.seek(start)
-                while True:
-                    chunk = await response.content.read(CHUNK_SIZE)
-                    if not chunk:
-                        break
-                    f.write(chunk)
+    try:
+        async with session.get(url, headers=headers) as response:
+            if response.status in [200, 206]:  # 206 is partial content for ranged downloads
+                with open(file_path, "r+b") as f:
+                    f.seek(start)
+                    while True:
+                        chunk = await response.content.read(CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                return True
+            else:
+                raise Exception(f"Unexpected response status: {response.status}")
+    except Exception as e:
+        logger.error(f"Error downloading chunk: {e}")
+        if retries < MAX_RETRIES:
+            await asyncio.sleep(2)
+            return await download_chunk(url, start, end, session, file_path, retries + 1)
+        else:
+            return False
 
 async def download_file(url: str, file_path: str, update: Update, context: ContextTypes.DEFAULT_TYPE, progress_message):
     """Downloads the file from the provided URL in parallel chunks and tracks the progress."""
@@ -61,27 +72,32 @@ async def download_file(url: str, file_path: str, update: Update, context: Conte
         # Use asyncio's gather to run parallel downloads
         start_time = time.time()
         bytes_downloaded = 0
+        download_tasks = []
 
         async with aiohttp.ClientSession() as session:
-            tasks = []
             for start, end in ranges:
                 task = asyncio.create_task(download_chunk(url, start, end, session, file_path))
-                tasks.append(task)
-                bytes_downloaded += (end - start + 1)
+                download_tasks.append(task)
 
-                # Calculate percentage and speed
-                percent_downloaded = (bytes_downloaded / total_size) * 100 if total_size else 0
-                elapsed_time = time.time() - start_time
-                download_speed = bytes_downloaded / elapsed_time / 1024 / 1024  # Speed in MB/s
+            results = await asyncio.gather(*download_tasks)
 
-                # Update progress message
-                await context.bot.edit_message_text(
-                    chat_id=progress_message.chat_id,
-                    message_id=progress_message.message_id,
-                    text=f"Downloading... {percent_downloaded:.2f}%\nSpeed: {download_speed:.2f} MB/s"
-                )
-            await asyncio.gather(*tasks)
-            
+            if not all(results):
+                raise Exception("Max retries exceeded for downloading some chunks.")
+
+            bytes_downloaded = total_size
+
+            # Calculate percentage and speed
+            percent_downloaded = (bytes_downloaded / total_size) * 100 if total_size else 0
+            elapsed_time = time.time() - start_time
+            download_speed = bytes_downloaded / elapsed_time / 1024 / 1024  # Speed in MB/s
+
+            # Update progress message
+            await context.bot.edit_message_text(
+                chat_id=progress_message.chat_id,
+                message_id=progress_message.message_id,
+                text=f"Downloaded {percent_downloaded:.2f}% at {download_speed:.2f} MB/s"
+            )
+
         logger.info(f"File downloaded successfully: {file_path}")
         return file_path
     except Exception as e:
