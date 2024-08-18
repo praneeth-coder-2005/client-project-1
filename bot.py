@@ -11,8 +11,11 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 # Replace with your actual bot token
 TOKEN = "6343124020:AAFFap55YkVIN_pyXzGtsyTNk2nLeJ0_qRI"
 
-# Set up logging
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# Set up detailed logging for better debugging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.DEBUG  # Set to DEBUG for more detailed output
+)
 logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 1024 * 1024  # 1MB chunk size for streaming download
@@ -37,9 +40,11 @@ You can send a video file or provide a download link for a video file, and the b
 async def download_file(url: str, file_path: str, update: Update, context: ContextTypes.DEFAULT_TYPE, progress_message):
     """Downloads the file with a speed limit of 1.25 MB/s (10 Mbps)."""
     try:
+        logger.debug(f"Starting download from {url} to {file_path}")
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=None, sock_read=TIMEOUT)) as session:
             async with session.get(url) as response:
                 total_size = int(response.headers.get('content-length', 0))
+                logger.debug(f"Total size of the file: {total_size} bytes")
                 bytes_downloaded = 0
                 start_time = time.time()
 
@@ -49,6 +54,7 @@ async def download_file(url: str, file_path: str, update: Update, context: Conte
                         try:
                             chunk = await response.content.read(CHUNK_SIZE)
                             if not chunk:
+                                logger.debug("Download complete")
                                 break  # Download finished
                             f.write(chunk)
                             bytes_downloaded += len(chunk)
@@ -86,6 +92,7 @@ async def download_file(url: str, file_path: str, update: Update, context: Conte
 async def upload_file(file_path: str, update: Update, context: ContextTypes.DEFAULT_TYPE, progress_message):
     """Uploads the processed file with a speed limit of 1.25 MB/s (10 Mbps)."""
     try:
+        logger.debug(f"Starting upload of {file_path}")
         total_size = os.path.getsize(file_path)
         bytes_uploaded = 0
         chunk_size = 1024 * 1024  # 1MB
@@ -95,6 +102,7 @@ async def upload_file(file_path: str, update: Update, context: ContextTypes.DEFA
             while True:
                 chunk = f.read(chunk_size)
                 if not chunk:
+                    logger.debug("Upload complete")
                     break
                 bytes_uploaded += len(chunk)
 
@@ -132,16 +140,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         title_text = "Your Video Title"
 
         try:
+            logger.info(f"Handling message: {message_text}")
             # Download the file with progress tracking
             file_path = await download_file(message_text, local_filename, update, context, progress_message)
 
             # Process the video (add watermark, title, and timeline)
+            logger.info("Starting video processing...")
             add_watermark_title_timeline(file_path, output_filename, title_text, watermark_path)
 
             # Notify the user and upload the processed file with progress tracking
+            logger.info("Uploading the processed video...")
             await upload_file(output_filename, update, context, progress_message)
 
         except Exception as e:
+            logger.error(f"Failed to process the video. Error: {e}")
             await context.bot.edit_message_text(
                 chat_id=progress_message.chat_id,
                 message_id=progress_message.message_id,
@@ -153,6 +165,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def add_watermark_title_timeline(input_video_path, output_video_path, title_text, watermark_path):
     """Adds a watermark, title, and timeline to the video without processing audio."""
     try:
+        logger.debug(f"Processing video: {input_video_path}")
         # Load the video, keeping the original audio
         video_clip = VideoFileClip(input_video_path)
 
@@ -183,6 +196,7 @@ def add_watermark_title_timeline(input_video_path, output_video_path, title_text
             video_clip = CompositeVideoClip([video_clip, title_clip, timeline_clip])
 
         # Write the output video with the original audio (no audio processing)
+        logger.debug(f"Writing video to {output_video_path}")
         video_clip.write_videofile(
             output_video_path,
             codec="libx264",
