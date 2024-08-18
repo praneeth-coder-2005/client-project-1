@@ -1,9 +1,7 @@
 import os
 import logging
 import aiohttp
-import asyncio
 import time
-from concurrent.futures import ThreadPoolExecutor
 from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -17,6 +15,7 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 5 * 1024 * 1024  # 5MB chunk size
+MAX_RETRIES = 3  # Maximum number of retries for failed chunks
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text('Send me a video link, and I will add a watermark, title, and timestamp.')
@@ -31,59 +30,47 @@ You can send a video file or provide a download link for a video file, and the b
 """
     await update.message.reply_text(help_text)
 
-async def download_chunk(url: str, start: int, end: int, session: aiohttp.ClientSession, file_path: str):
-    """Downloads a specific chunk of the file."""
-    headers = {"Range": f"bytes={start}-{end}"}
-    async with session.get(url, headers=headers) as response:
-        if response.status in [200, 206]:  # 206 is partial content for ranged downloads
-            with open(file_path, "r+b") as f:
-                f.seek(start)
-                while True:
-                    chunk = await response.content.read(CHUNK_SIZE)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-
 async def download_file(url: str, file_path: str, update: Update, context: ContextTypes.DEFAULT_TYPE, progress_message):
-    """Downloads the file from the provided URL in parallel chunks and tracks the progress."""
+    """Downloads the file from the provided URL with retry logic and tracks the progress."""
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.head(url) as response:
+            async with session.get(url) as response:
                 total_size = int(response.headers.get('content-length', 0))
+                chunk_size = CHUNK_SIZE
+                bytes_downloaded = 0
+                retries = 0
 
-        # Create an empty file of the required size
-        with open(file_path, "wb") as f:
-            f.truncate(total_size)
+                with open(file_path, 'wb') as f:
+                    while bytes_downloaded < total_size:
+                        try:
+                            chunk = await response.content.read(chunk_size)
+                            if not chunk:
+                                break
+                            f.write(chunk)
+                            bytes_downloaded += len(chunk)
 
-        # Split the file into chunks for parallel downloading
-        ranges = [(i, min(i + CHUNK_SIZE - 1, total_size - 1)) for i in range(0, total_size, CHUNK_SIZE)]
-        
-        # Use asyncio's gather to run parallel downloads
-        start_time = time.time()
-        bytes_downloaded = 0
+                            # Calculate percentage and speed
+                            percent_downloaded = (bytes_downloaded / total_size) * 100 if total_size else 0
+                            download_speed = bytes_downloaded / (time.time() - start_time) / 1024 / 1024  # Speed in MB/s
 
-        async with aiohttp.ClientSession() as session:
-            tasks = []
-            for start, end in ranges:
-                task = asyncio.create_task(download_chunk(url, start, end, session, file_path))
-                tasks.append(task)
-                bytes_downloaded += (end - start + 1)
+                            # Update progress message
+                            await context.bot.edit_message_text(
+                                chat_id=progress_message.chat_id,
+                                message_id=progress_message.message_id,
+                                text=f"Downloading... {percent_downloaded:.2f}%\nSpeed: {download_speed:.2f} MB/s"
+                            )
 
-                # Calculate percentage and speed
-                percent_downloaded = (bytes_downloaded / total_size) * 100 if total_size else 0
-                elapsed_time = time.time() - start_time
-                download_speed = bytes_downloaded / elapsed_time / 1024 / 1024  # Speed in MB/s
+                            retries = 0  # Reset retries after successful download of a chunk
+                        except Exception as e:
+                            retries += 1
+                            logger.error(f"Error downloading chunk: {e}")
+                            if retries > MAX_RETRIES:
+                                raise Exception("Max retries exceeded for downloading.")
+                            time.sleep(2)  # Wait for 2 seconds before retrying
 
-                # Update progress message
-                await context.bot.edit_message_text(
-                    chat_id=progress_message.chat_id,
-                    message_id=progress_message.message_id,
-                    text=f"Downloading... {percent_downloaded:.2f}%\nSpeed: {download_speed:.2f} MB/s"
-                )
-            await asyncio.gather(*tasks)
-            
-        logger.info(f"File downloaded successfully: {file_path}")
-        return file_path
+                logger.info(f"File downloaded successfully: {file_path}")
+                return file_path
+
     except Exception as e:
         logger.error(f"Error downloading file: {e}")
         raise
@@ -151,12 +138,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Please provide a valid download link.")
 
 def add_watermark_title_timeline(input_video_path, output_video_path, title_text, watermark_path):
-    """Adds a watermark, title, and timeline to the video and reduces quality."""
+    """Adds a watermark, title, and timeline to the video without processing audio."""
     try:
-        # Load the video
+        # Load the video, keeping the original audio
         video_clip = VideoFileClip(input_video_path)
 
-        # Reduce the resolution and quality to prevent resource overuse
+        # Reduce the resolution to prevent resource overuse
         video_clip = video_clip.resize(height=360)
 
         video_duration = video_clip.duration
@@ -182,14 +169,15 @@ def add_watermark_title_timeline(input_video_path, output_video_path, title_text
         else:
             video_clip = CompositeVideoClip([video_clip, title_clip, timeline_clip])
 
-        # Write the output video, retry on failure
-        try:
-            video_clip.write_videofile(output_video_path, codec="libx264", audio_codec="aac")
-            logger.info(f"Video processing completed: {output_video_path}")
-        except Exception as e:
-            logger.error(f"Error during video processing: {e}")
-            raise
-
+        # Write the output video with the original audio (no audio processing)
+        video_clip.write_videofile(
+            output_video_path,
+            codec="libx264",
+            audio=True,  # Retain the original audio without re-encoding
+            preset="fast",  # Faster encoding preset
+            threads=4  # Use multiple threads for faster encoding
+        )
+        logger.info(f"Video processing completed: {output_video_path}")
     except Exception as e:
         logger.error(f"Error processing video: {e}")
         raise
