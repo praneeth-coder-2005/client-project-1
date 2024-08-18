@@ -13,7 +13,7 @@ import time
 MAX_FILESIZE_UPLOAD = 2 * 1024 * 1024 * 1024  # 2GB in bytes
 
 # Replace with your actual bot token
-TOKEN = os.environ.get('6343124020:AAFFap55YkVIN_pyXzGtsyTNk2nLeJ0_qRI')
+TOKEN = os.environ.get('TOKEN')
 DEFAULT_WATERMARK_PATH = 'default_watermark.png'
 
 # Set up logging
