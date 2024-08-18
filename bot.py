@@ -1,7 +1,9 @@
 import os
 import logging
 import aiohttp
+import asyncio
 import time
+from concurrent.futures import ThreadPoolExecutor
 from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -13,6 +15,8 @@ WEBHOOK_URL = "https://test-1-9bmd.onrender.com/6343124020:AAFFap55YkVIN_pyXzGts
 # Set up logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+CHUNK_SIZE = 5 * 1024 * 1024  # 5MB chunk size
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text('Send me a video link, and I will add a watermark, title, and timestamp.')
@@ -27,41 +31,124 @@ You can send a video file or provide a download link for a video file, and the b
 """
     await update.message.reply_text(help_text)
 
+async def download_chunk(url: str, start: int, end: int, session: aiohttp.ClientSession, file_path: str):
+    """Downloads a specific chunk of the file."""
+    headers = {"Range": f"bytes={start}-{end}"}
+    async with session.get(url, headers=headers) as response:
+        if response.status in [200, 206]:  # 206 is partial content for ranged downloads
+            with open(file_path, "r+b") as f:
+                f.seek(start)
+                while True:
+                    chunk = await response.content.read(CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+
 async def download_file(url: str, file_path: str, update: Update, context: ContextTypes.DEFAULT_TYPE, progress_message):
-    """Downloads the file from the provided URL and tracks the progress."""
+    """Downloads the file from the provided URL in parallel chunks and tracks the progress."""
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
+            async with session.head(url) as response:
                 total_size = int(response.headers.get('content-length', 0))
-                chunk_size = 1024 * 1024  # 1MB
-                bytes_downloaded = 0
-                start_time = time.time()
 
-                with open(file_path, 'wb') as f:
-                    while True:
-                        chunk = await response.content.read(chunk_size)
-                        if not chunk:
-                            break
-                        f.write(chunk)
-                        bytes_downloaded += len(chunk)
+        # Create an empty file of the required size
+        with open(file_path, "wb") as f:
+            f.truncate(total_size)
 
-                        # Calculate percentage and speed
-                        percent_downloaded = (bytes_downloaded / total_size) * 100 if total_size else 0
-                        elapsed_time = time.time() - start_time
-                        download_speed = bytes_downloaded / elapsed_time / 1024  # KB/s
+        # Split the file into chunks for parallel downloading
+        ranges = [(i, min(i + CHUNK_SIZE - 1, total_size - 1)) for i in range(0, total_size, CHUNK_SIZE)]
+        
+        # Use asyncio's gather to run parallel downloads
+        start_time = time.time()
+        bytes_downloaded = 0
 
-                        # Update progress message
-                        await context.bot.edit_message_text(
-                            chat_id=progress_message.chat_id,
-                            message_id=progress_message.message_id,
-                            text=f"Downloading... {percent_downloaded:.2f}%\nSpeed: {download_speed:.2f} KB/s"
-                        )
+        async with aiohttp.ClientSession() as session:
+            tasks = []
+            for start, end in ranges:
+                task = asyncio.create_task(download_chunk(url, start, end, session, file_path))
+                tasks.append(task)
+                bytes_downloaded += (end - start + 1)
 
-                logger.info(f"File downloaded successfully: {file_path}")
-                return file_path
+                # Calculate percentage and speed
+                percent_downloaded = (bytes_downloaded / total_size) * 100 if total_size else 0
+                elapsed_time = time.time() - start_time
+                download_speed = bytes_downloaded / elapsed_time / 1024 / 1024  # Speed in MB/s
+
+                # Update progress message
+                await context.bot.edit_message_text(
+                    chat_id=progress_message.chat_id,
+                    message_id=progress_message.message_id,
+                    text=f"Downloading... {percent_downloaded:.2f}%\nSpeed: {download_speed:.2f} MB/s"
+                )
+            await asyncio.gather(*tasks)
+            
+        logger.info(f"File downloaded successfully: {file_path}")
+        return file_path
     except Exception as e:
         logger.error(f"Error downloading file: {e}")
         raise
+
+async def upload_file(file_path: str, update: Update, context: ContextTypes.DEFAULT_TYPE, progress_message):
+    """Uploads the processed file to the user with progress tracking."""
+    try:
+        total_size = os.path.getsize(file_path)
+        bytes_uploaded = 0
+        chunk_size = 1024 * 1024  # 1MB
+        start_time = time.time()
+
+        with open(file_path, 'rb') as f:
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                bytes_uploaded += len(chunk)
+
+                # Calculate percentage and speed
+                percent_uploaded = (bytes_uploaded / total_size) * 100
+                elapsed_time = time.time() - start_time
+                upload_speed = bytes_uploaded / elapsed_time / 1024 / 1024  # Speed in MB/s
+
+                # Update progress message
+                await context.bot.edit_message_text(
+                    chat_id=progress_message.chat_id,
+                    message_id=progress_message.message_id,
+                    text=f"Uploading... {percent_uploaded:.2f}%\nSpeed: {upload_speed:.2f} MB/s"
+                )
+
+        # Upload complete, send the final file
+        await context.bot.send_document(chat_id=update.effective_chat.id, document=open(file_path, 'rb'))
+    except Exception as e:
+        logger.error(f"Error uploading file: {e}")
+        raise
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message_text = update.message.text
+    if message_text.startswith('http'):
+        progress_message = await update.message.reply_text("Starting download and processing...")
+
+        local_filename = "downloaded_video.mp4"
+        output_filename = "output_video.mp4"
+        watermark_path = "watermark.png"
+        title_text = "Your Video Title"
+
+        try:
+            # Download the file with progress tracking
+            file_path = await download_file(message_text, local_filename, update, context, progress_message)
+
+            # Process the video (add watermark, title, and timeline)
+            add_watermark_title_timeline(file_path, output_filename, title_text, watermark_path)
+
+            # Notify the user and upload the processed file with progress tracking
+            await upload_file(output_filename, update, context, progress_message)
+
+        except Exception as e:
+            await context.bot.edit_message_text(
+                chat_id=progress_message.chat_id,
+                message_id=progress_message.message_id,
+                text=f"Failed to process the video. Error: {e}"
+            )
+    else:
+        await update.message.reply_text("Please provide a valid download link.")
 
 def add_watermark_title_timeline(input_video_path, output_video_path, title_text, watermark_path):
     """Adds a watermark, title, and timeline to the video and reduces quality."""
@@ -106,68 +193,6 @@ def add_watermark_title_timeline(input_video_path, output_video_path, title_text
     except Exception as e:
         logger.error(f"Error processing video: {e}")
         raise
-
-async def upload_file(file_path: str, update: Update, context: ContextTypes.DEFAULT_TYPE, progress_message):
-    """Uploads the processed file to the user with progress tracking."""
-    try:
-        total_size = os.path.getsize(file_path)
-        bytes_uploaded = 0
-        chunk_size = 1024 * 1024  # 1MB
-        start_time = time.time()
-
-        with open(file_path, 'rb') as f:
-            while True:
-                chunk = f.read(chunk_size)
-                if not chunk:
-                    break
-                bytes_uploaded += len(chunk)
-
-                # Calculate percentage and speed
-                percent_uploaded = (bytes_uploaded / total_size) * 100
-                elapsed_time = time.time() - start_time
-                upload_speed = bytes_uploaded / elapsed_time / 1024  # KB/s
-
-                # Update progress message
-                await context.bot.edit_message_text(
-                    chat_id=progress_message.chat_id,
-                    message_id=progress_message.message_id,
-                    text=f"Uploading... {percent_uploaded:.2f}%\nSpeed: {upload_speed:.2f} KB/s"
-                )
-
-        # Upload complete, send the final file
-        await context.bot.send_document(chat_id=update.effective_chat.id, document=open(file_path, 'rb'))
-    except Exception as e:
-        logger.error(f"Error uploading file: {e}")
-        raise
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message_text = update.message.text
-    if message_text.startswith('http'):
-        progress_message = await update.message.reply_text("Starting download and processing...")
-
-        local_filename = "downloaded_video.mp4"
-        output_filename = "output_video.mp4"
-        watermark_path = "watermark.png"
-        title_text = "Your Video Title"
-
-        try:
-            # Download the file with progress tracking
-            file_path = await download_file(message_text, local_filename, update, context, progress_message)
-
-            # Process the video (add watermark, title, and timeline)
-            add_watermark_title_timeline(file_path, output_filename, title_text, watermark_path)
-
-            # Notify the user and upload the processed file with progress tracking
-            await upload_file(output_filename, update, context, progress_message)
-
-        except Exception as e:
-            await context.bot.edit_message_text(
-                chat_id=progress_message.chat_id,
-                message_id=progress_message.message_id,
-                text=f"Failed to process the video. Error: {e}"
-            )
-    else:
-        await update.message.reply_text("Please provide a valid download link.")
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error(msg="Exception while handling an update:", exc_info=context.error)
