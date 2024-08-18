@@ -1,6 +1,6 @@
 import os
 import logging
-import aiohttp  # Ensure aiohttp is imported
+import aiohttp
 from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -29,7 +29,7 @@ You can send a video file or provide a download link for a video file, and the b
 async def download_file(url: str, file_path: str):
     """Downloads the file from the provided URL and saves it locally."""
     try:
-        async with aiohttp.ClientSession() as session:  # Using aiohttp for async file download
+        async with aiohttp.ClientSession() as session:
             async with session.get(url) as response:
                 if response.status == 200:
                     with open(file_path, 'wb') as f:
@@ -48,32 +48,37 @@ async def download_file(url: str, file_path: str):
 
 def add_watermark_title_timeline(input_video_path, output_video_path, title_text, watermark_path):
     """Adds a watermark, title, and timeline to the video."""
-    video_clip = VideoFileClip(input_video_path)
-    video_duration = video_clip.duration
+    try:
+        video_clip = VideoFileClip(input_video_path)
+        video_duration = video_clip.duration
 
-    # Create the title text
-    title_clip = TextClip(title_text, fontsize=70, color='white').set_duration(video_duration).set_position('top').set_fps(24)
+        # Create the title text
+        title_clip = TextClip(title_text, fontsize=70, color='white').set_duration(video_duration).set_position('top').set_fps(24)
 
-    # Create a timeline (time overlay)
-    def time_text(t):
-        minutes = int(t // 60)
-        seconds = int(t % 60)
-        return f"{minutes}:{seconds:02d}"
+        # Create a timeline (time overlay)
+        def time_text(t):
+            minutes = int(t // 60)
+            seconds = int(t % 60)
+            return f"{minutes}:{seconds:02d}"
 
-    timeline_clip = (TextClip(time_text(0), fontsize=40, color='white')
-                     .set_duration(video_duration)
-                     .set_position(('right', 'bottom'))
-                     .set_fps(24))
+        timeline_clip = (TextClip(time_text(0), fontsize=40, color='white')
+                         .set_duration(video_duration)
+                         .set_position(('right', 'bottom'))
+                         .set_fps(24))
 
-    # Add watermark if provided
-    if watermark_path and os.path.exists(watermark_path):
-        watermark_clip = VideoFileClip(watermark_path).resize(height=50).set_duration(video_duration).set_position(('right', 'top'))
-        video_clip = CompositeVideoClip([video_clip, title_clip, timeline_clip, watermark_clip])
-    else:
-        video_clip = CompositeVideoClip([video_clip, title_clip, timeline_clip])
+        # Add watermark if provided
+        if watermark_path and os.path.exists(watermark_path):
+            watermark_clip = VideoFileClip(watermark_path).resize(height=50).set_duration(video_duration).set_position(('right', 'top'))
+            video_clip = CompositeVideoClip([video_clip, title_clip, timeline_clip, watermark_clip])
+        else:
+            video_clip = CompositeVideoClip([video_clip, title_clip, timeline_clip])
 
-    # Write the output video
-    video_clip.write_videofile(output_video_path, codec="libx264", audio_codec="aac")
+        # Write the output video
+        video_clip.write_videofile(output_video_path, codec="libx264", audio_codec="aac")
+        logger.info(f"Video processing completed: {output_video_path}")
+    except Exception as e:
+        logger.error(f"Error during video processing: {e}")
+        raise
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_text = update.message.text
