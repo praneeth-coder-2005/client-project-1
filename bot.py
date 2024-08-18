@@ -111,7 +111,7 @@ def main():
     )
 
     application.add_handler(conv_handler)
-    application.add_handler(MessageHandler(filters.Document.ALL | filters.Video.ALL, handle_large_file))
+    application.add_handler(MessageHandler(filters.Document.VIDEO | filters.VIDEO, handle_large_file))
     application.add_error_handler(error_handler)
     application.run_polling(drop_pending_updates=True)
 
